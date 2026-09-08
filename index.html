@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Сдай бутылку — демо</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0E0F14; --surface:#171923; --surface2:#1E212D; --border:#2A2D3B;
+    --text:#ECEDF3; --muted:#8A8DA1; --biz:#47ACA5; --dev:#E8A33D; --success:#4CB27D;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; min-height:100vh;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  .wrap{max-width:420px; margin:0 auto; padding:28px 20px 60px;}
+  h1{font-size:20px; font-weight:700; margin:0 0 4px;}
+  .muted{color:var(--muted); font-size:13px; line-height:1.5;}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px; margin-top:18px;}
+  .qr-box{background:#fff; border-radius:12px; padding:16px; display:flex; justify-content:center; margin:16px 0;}
+
+  .count-row{display:flex; align-items:baseline; gap:8px; margin-bottom:6px;}
+  .count{font-size:40px; font-weight:700; font-family:'JetBrains Mono',monospace;}
+  .count-label{color:var(--muted); font-size:13px;}
+
+  .bar-track{background:var(--surface2); border-radius:8px; height:14px; overflow:hidden; margin:10px 0;}
+  .bar-fill{background:var(--biz); height:100%; border-radius:8px; transition:width .4s ease;}
+
+  .tier-text{font-size:13px; color:var(--text); margin-top:4px;}
+  .tier-reward{font-size:13px; color:var(--dev); margin-top:8px; padding:10px 12px; background:rgba(232,163,61,0.12); border-radius:8px;}
+  .maxed{color:var(--success); font-weight:600;}
+
+  .hint{
+    margin-top:22px; font-size:12px; color:var(--muted); line-height:1.6;
+    border-top:1px solid var(--border); padding-top:16px;
+  }
+  .hint code{background:var(--surface2); padding:2px 6px; border-radius:4px; color:var(--text);}
+
+  /* admin */
+  .admin-badge{
+    display:inline-block; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--dev);
+    border:1px solid var(--dev); border-radius:20px; padding:3px 10px; margin-bottom:10px;
+  }
+  input[type="text"]{
+    width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px;
+    padding:11px 13px; color:var(--text); font-family:'JetBrains Mono',monospace; font-size:14px; margin-bottom:10px;
+  }
+  input:focus{outline:2px solid var(--biz); outline-offset:1px;}
+  button{
+    width:100%; background:var(--biz); color:#0E0F14; border:none; border-radius:8px;
+    padding:12px; font-weight:600; font-size:14px; cursor:pointer; font-family:'Inter',sans-serif;
+  }
+  button:hover{background:#59BDB5;}
+  .log{margin-top:16px; font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:6px;}
+  .log-line{background:var(--surface2); border-radius:6px; padding:8px 10px;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+  const REWARD_TIERS = [
+    [5, '🎉 5 бутылок — скидка 5% в фудкорте'],
+    [10, '🍔 10 бутылок — скидка в Burger King'],
+    [20, '👕 20 бутылок — скидка на одежду в ТЦ'],
+    [50, '🏆 50 бутылок — максимальный уровень'],
+  ];
+
+  // Личность человека — локальный профиль в этом браузере,
+  // а не что-то зашитое в QR. QR на урне одинаковый для всех.
+  function getOrCreateLocalProfileId(){
+    let id = localStorage.getItem('bottle_demo_uid');
+    if (!id){
+      id = 'P' + Math.random().toString(36).slice(2, 9).toUpperCase();
+      localStorage.setItem('bottle_demo_uid', id);
+    }
+    return id;
+  }
+
+  // Хранение через localStorage — работает в любом браузере на
+  // реальном хостинге. Важно понимать ограничение: это ПОКА хранится
+  // только в браузере конкретного человека, а не в общей базе данных.
+  // Для настоящего продукта с урнами в разных ТЦ в итоге понадобится
+  // сервер и база данных — localStorage это временный, демо-уровень.
+
+  function getBottles(id){
+    return parseInt(localStorage.getItem('bottles_' + id) || '0', 10);
+  }
+
+  function setBottles(id, n){
+    localStorage.setItem('bottles_' + id, String(n));
+  }
+
+  function pushLog(id, n){
+    const log = JSON.parse(localStorage.getItem('scan_log') || '[]');
+    log.unshift({ id, n, t: new Date().toLocaleTimeString('ru-RU') });
+    localStorage.setItem('scan_log', JSON.stringify(log.slice(0, 20)));
+  }
+
+  function nextTier(n){
+    for (const [th, label] of REWARD_TIERS){
+      if (n < th) return [th, label];
+    }
+    return null;
+  }
+
+  function getParam(name){
+    return new URLSearchParams(location.search).get(name);
+  }
+
+  const URN_LINK = location.origin + location.pathname + '?urn=1';
+
+  // ---------------- ПРОФИЛЬ ----------------
+  function renderProfile(justScanned){
+    const id = getOrCreateLocalProfileId();
+    const app = document.getElementById('app');
+
+    app.innerHTML = `
+      <h1>♻️ Сдай бутылку</h1>
+      <p class="muted">Твой профиль на этом устройстве. Отсканируй QR на урне камерой телефона — откроется эта же страница и бутылка засчитается автоматически.</p>
+      ${justScanned ? `<div class="tier-reward" style="margin-top:14px;">✅ Бутылка засчитана!</div>` : ''}
+      <div class="card">
+        <div class="count-row"><span class="count" id="count">0</span><span class="count-label">бутылок сдано</span></div>
+        <div class="bar-track"><div class="bar-fill" id="bar" style="width:0%"></div></div>
+        <div class="tier-text" id="tierText"></div>
+      </div>
+      <div class="card">
+        <div class="muted" style="margin-bottom:10px;">Демо-урна №1 (в реальности — стикер на баке)</div>
+        <div class="qr-box"><div id="qr"></div></div>
+        <p class="muted mono" style="text-align:center; word-break:break-all; margin-top:10px;">${URN_LINK}</p>
+        <button id="scanBtn" style="margin-top:12px; background:var(--surface2); color:var(--text);">Или просто нажми — симуляция скана</button>
+      </div>
+      <div class="hint">
+        Статистика по сканированиям на этом устройстве:
+        <button id="statsBtn" style="margin-top:8px; background:var(--surface2); color:var(--text);">Открыть статистику</button>
+      </div>
+    `;
+
+    document.getElementById('scanBtn').addEventListener('click', () => {
+      const n = getBottles(id) + 1;
+      setBottles(id, n);
+      pushLog(id, n);
+      renderProfile(true);
+    });
+
+    document.getElementById('statsBtn').addEventListener('click', renderAdmin);
+
+    try {
+      new QRCode(document.getElementById('qr'), { text: URN_LINK, width: 140, height: 140 });
+    } catch(e){
+      document.getElementById('qr').innerHTML = '<div class="muted" style="padding:20px;">QR временно недоступен</div>';
+    }
+
+    const n = getBottles(id);
+    document.getElementById('count').textContent = n;
+    const tier = nextTier(n);
+    if (tier){
+      const [th, label] = tier;
+      document.getElementById('bar').style.width = Math.min(100, (n/th)*100) + '%';
+      document.getElementById('tierText').innerHTML =
+        `До следующей награды: <b>${th - n}</b><br><span class="muted">${label}</span>`;
+    } else {
+      document.getElementById('bar').style.width = '100%';
+      document.getElementById('tierText').innerHTML = `<span class="maxed">🏆 Максимальный уровень достигнут</span>`;
+    }
+  }
+
+  // ---------------- СТАТИСТИКА ----------------
+  function renderAdmin(){
+    const app = document.getElementById('app');
+    const log = JSON.parse(localStorage.getItem('scan_log') || '[]');
+    app.innerHTML = `
+      <span class="admin-badge">СТАТИСТИКА (демо)</span>
+      <h1>Активность по урнам</h1>
+      <p class="muted">Лог сканирований на этом устройстве — то, что видел бы оператор ТЦ, если бы данные шли на общий сервер.</p>
+      <div class="card"><div class="log" id="log">${
+        log.map(e => `<div class="log-line">${e.t} — профиль ${e.id}: стало ${e.n} 🍾</div>`).join('')
+        || '<div class="muted">Пока не было сканирований</div>'
+      }</div></div>
+      <button id="backBtn" style="margin-top:16px; background:var(--surface2); color:var(--text);">← Вернуться в профиль</button>
+    `;
+    document.getElementById('backBtn').addEventListener('click', () => renderProfile(false));
+  }
+
+  // ---------------- РОУТИНГ ----------------
+  function main(){
+    if (getParam('admin')){
+      renderAdmin();
+      return;
+    }
+    if (getParam('urn')){
+      const id = getOrCreateLocalProfileId();
+      const n = getBottles(id) + 1;
+      setBottles(id, n);
+      pushLog(id, n);
+
+      const url = new URL(location.href);
+      url.searchParams.delete('urn');
+      history.replaceState(null, '', url);
+
+      renderProfile(true);
+      return;
+    }
+    renderProfile(false);
+  }
+
+  main();
+</script>
+</body>
+</html>
